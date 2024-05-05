@@ -12,7 +12,7 @@ import random
 from collections import deque
 
 # 파라미터 값 세팅
-state_size = [1*3, 64, 64]
+state_size = [1*3, 224, 224]
 action_size = 5
 
 load_model = False
@@ -43,113 +43,166 @@ print(f'Device set as {device}')
 class DQNNetwork(torch.nn.Module):
     def __init__(self, **kwargs):
         super(DQNNetwork, self).__init__(**kwargs)
-        self.conv1_kernel_size = 4
-        self.conv1_stride = 2
-        self.conv1_out_channel = 16
-        self.conv1 = torch.nn.Conv2d(in_channels=state_size[0], out_channels=self.conv1_out_channel,
-                                     kernel_size=self.conv1_kernel_size, stride=self.conv1_stride)
-        dim1 = ((state_size[1] - self.conv1_kernel_size) // self.conv1_stride + 1, (state_size[2] - self.conv1_kernel_size) // self.conv1_stride + 1)
+        self.params = None
+        self.compression = 0.5
+        self.dim = [0, 0, 0]
+        # Convolution
+        # codes are in the Function - ConvolutionLayer
 
-        self.conv2_kernel_size = 4
-        self.conv2_stride = 2
-        self.conv2_out_channel = 32
-        self.conv2 = torch.nn.Conv2d(in_channels=self.conv1_out_channel, out_channels=self.conv2_out_channel,
-                                     kernel_size=self.conv2_kernel_size, stride=self.conv2_stride)
-        dim2 = ((dim1[0] - self.conv2_kernel_size) // self.conv2_stride + 1, (dim1[1] - self.conv2_kernel_size) // self.conv2_stride + 1)
+        # Dense Block(1)
+        # codes are in the Function - DenseBlock
+        self.denseBlock_1ChannelSize = 32
+        self.denseBlock_1Cnt = 6
+
+        # Transition Layer(1)
+        # codes are in the Function - TransitionLayer
+
+        # Dense Block(2)
+        # codes are in the Function - DenseBlock
+        self.denseBlock_2ChannelSize = 32
+        self.denseBlock_2Cnt = 12
+
+        # Transition Layer(2)
+        # codes are in the Function - TransitionLayer
+
+        # Dense Block(3)
+        # codes are in the Function - DenseBlock
+        self.denseBlock_3ChannelSize = 32
+        self.denseBlock_3Cnt = 24
+
+        # Dense Block(4)
+        # codes are in the Function - DenseBlock
+        self.denseBlock_4ChannelSize = 32
+        self.denseBlock_4Cnt = 16
 
         self.flat = torch.nn.Flatten()
 
-        self.fc1 = torch.nn.Linear(32 * dim2[0] * dim2[1], 1024)
-        # self.fc1 = torch.nn.Linear(3 * 64 * 64, 4096)
-        self.fc2 = torch.nn.Linear(1024, 2048)
-        self.fc3 = torch.nn.Linear(2048, 2048)
-        self.fc4 = torch.nn.Linear(2048, 1024)
-        self.fc5 = torch.nn.Linear(1024, 512)
-        self.fc6 = torch.nn.Linear(512, 256)
-        self.fc_out = torch.nn.Linear(256, action_size)
+        # FC Layers
+        self.fc1 = torch.nn.Linear(1024 * 7 * 7, 1024, device=device)
+        self.fc2 = torch.nn.Linear(1024, 256, device=device)
+        self.fc_out = torch.nn.Linear(256, action_size, device=device)
+
+    def ConvolutionLayer(self, x):
+        conv_kernel_size = 7
+        conv_stride = 2
+        conv_out_channel = 64
+        # padding = ((output_size - 1) * stride + kernel_size - input_size) / 2
+        conv_padding = ((state_size[1] // 2 - 1) * conv_stride + conv_kernel_size - state_size[1]) / 2
+        if conv_padding > int(conv_padding):
+            conv_padding += 0.5
+        conv = torch.nn.Conv2d(in_channels=state_size[0], out_channels=conv_out_channel,
+                               kernel_size=conv_kernel_size, stride=conv_stride,
+                               padding=int(conv_padding), device=device)
+        self.dim = (conv_out_channel,
+                    (state_size[1] - conv_kernel_size + 2 * conv_padding) // conv_stride + 1,
+                    (state_size[2] - conv_kernel_size + 2 * conv_padding) // conv_stride + 1)
+        batchNorm = torch.nn.BatchNorm2d(num_features=conv_out_channel, device=device)
+
+        # Pooling
+        maxPool_kernel_size = 3
+        maxPool_stride = 2
+        maxPool_padding = ((self.dim[1] // 2 - 1) * maxPool_stride + maxPool_kernel_size - self.dim[2]) / 2
+        if maxPool_padding > int(maxPool_padding):
+            maxPool_padding += 0.5
+        maxPool = torch.nn.MaxPool2d(kernel_size=maxPool_kernel_size, stride=maxPool_stride,
+                                     padding=int(maxPool_padding))
+
+        self.dim = (conv_out_channel, self.dim[1]//2, self.dim[2]//2)
+
+        x = conv(x)
+        x = batchNorm(x)
+        x = F.leaky_relu(x)
+        x = maxPool(x)
+        return x
+
+    def DenseBlock(self, x, denseChannelSize):
+        conv_1_kernel_size = 1
+        conv_1_stride = 1
+        conv_1_out_channel = 128
+        conv_1_padding = 0
+        conv_1 = torch.nn.Conv2d(in_channels=self.dim[0], out_channels=conv_1_out_channel,
+                                 kernel_size=conv_1_kernel_size, stride=conv_1_stride,
+                                 padding=conv_1_padding, device=device)
+        batchNorm_1 = torch.nn.BatchNorm2d(num_features=conv_1_out_channel, device=device)
+
+        conv_2_kernel_size = 3
+        conv_2_stride = 1
+        conv_2_out_channel = denseChannelSize
+        conv_2_padding = 1
+        conv_2 = torch.nn.Conv2d(in_channels=conv_1_out_channel, out_channels=conv_2_out_channel,
+                                 kernel_size=conv_2_kernel_size, stride=conv_2_stride,
+                                 padding=conv_2_padding, device=device)
+        batchNorm_2 = torch.nn.BatchNorm2d(num_features=conv_2_out_channel, device=device)
+
+        tmpX = conv_1(x)
+        tmpX = batchNorm_1(tmpX)
+        tmpX = F.leaky_relu(tmpX)
+        tmpX = conv_2(tmpX)
+        tmpX = batchNorm_2(tmpX)
+        tmpX = F.leaky_relu(tmpX)
+
+        return tmpX
+
+    def TransitionBlock(self, x, current_shape):
+        conv_kernel_size = 1
+        conv_stride = 1
+        conv_out_channel = int(current_shape * self.compression)
+        conv_padding = ((self.dim[1] - 1) * conv_stride + conv_kernel_size - self.dim[2]) / 2
+        if conv_padding > int(conv_padding):
+            conv_padding += 0.5
+        convN = torch.nn.Conv2d(in_channels=current_shape, out_channels=conv_out_channel,
+                                kernel_size=conv_kernel_size, stride=conv_stride,
+                                padding=int(conv_padding), device=device)
+        batchNorm = torch.nn.BatchNorm2d(num_features=conv_out_channel, device=device)
+
+        avgPool_kernel_size = 2
+        avgPool_stride = 2
+        avgPool = torch.nn.AvgPool2d(kernel_size=avgPool_kernel_size, stride=avgPool_stride)
+
+        self.dim = (conv_out_channel, self.dim[1]//2, self.dim[2]//2)
+
+        x = convN(x)
+        x = batchNorm(x)
+        x = F.leaky_relu(x)
+        x = avgPool(x)
+        return x
 
     def forward(self, x):
         # x = x.permute(0, 3, 1, 2)
         x = x.permute(0, 1, 2, 3)
-        x = F.leaky_relu(self.conv1(x))
-        x = F.leaky_relu(self.conv2(x))
+        x = self.ConvolutionLayer(x)
+        xCopy = x[:]
+        for i in range(self.denseBlock_1Cnt):
+            tmpX = self.DenseBlock(xCopy, self.denseBlock_1ChannelSize)
+            x = torch.cat((x, tmpX), dim=1)
+        # print(x.shape)
+        x = self.TransitionBlock(x, self.dim[0] + self.denseBlock_1ChannelSize * self.denseBlock_1Cnt)
+
+        xCopy = x[:]
+        for i in range(self.denseBlock_2Cnt):
+            tmpX = self.DenseBlock(xCopy, self.denseBlock_2ChannelSize)
+            x = torch.cat((x, tmpX), dim=1)
+        x = self.TransitionBlock(x, self.dim[0] + self.denseBlock_2ChannelSize * self.denseBlock_2Cnt)
+
+        xCopy = x[:]
+        for i in range(self.denseBlock_3Cnt):
+            tmpX = self.DenseBlock(xCopy, self.denseBlock_3ChannelSize)
+            x = torch.cat((x, tmpX), dim=1)
+        x = self.TransitionBlock(x, self.dim[0] + self.denseBlock_3ChannelSize * self.denseBlock_3Cnt)
+
+        xCopy = x[:]
+        for i in range(self.denseBlock_4Cnt):
+            tmpX = self.DenseBlock(xCopy, self.denseBlock_4ChannelSize)
+            x = torch.cat((x, tmpX), dim=1)
+        self.dim = x.shape[1:]
+
         x = self.flat(x)
 
         x = F.leaky_relu(self.fc1(x))
         x = F.leaky_relu(self.fc2(x))
-        x = F.leaky_relu(self.fc3(x))
-        x = F.leaky_relu(self.fc4(x))
-        x = F.leaky_relu(self.fc5(x))
-        x = F.leaky_relu(self.fc6(x))
+        x = F.softmax(self.fc_out(x), dim=-1)
 
-        return F.softmax(self.fc_out(x), dim=-1)
-
-
-class NN(torch.nn.Module):
-    def __init__(self, is_predictor):
-        super(NN, self).__init__()
-        self.is_predictor = is_predictor
-
-        self.conv1_kernel_size = 4
-        self.conv1_stride = 2
-        self.conv1_out_channel = 16
-        self.conv1 = torch.nn.Conv2d(in_channels=state_size[0], out_channels=self.conv1_out_channel,
-                                     kernel_size=self.conv1_kernel_size, stride=self.conv1_stride)
-        dim1 = ((state_size[1] - self.conv1_kernel_size) // self.conv1_stride + 1, (state_size[2] - self.conv1_kernel_size) // self.conv1_stride + 1)
-
-        self.conv2_kernel_size = 4
-        self.conv2_stride = 2
-        self.conv2_out_channel = 32
-        self.conv2 = torch.nn.Conv2d(in_channels=self.conv1_out_channel, out_channels=self.conv2_out_channel,
-                                     kernel_size=self.conv2_kernel_size, stride=self.conv2_stride)
-        dim2 = ((dim1[0] - self.conv2_kernel_size) // self.conv2_stride + 1, (dim1[1] - self.conv2_kernel_size) // self.conv2_stride + 1)
-
-        self.flat = torch.nn.Flatten()
-
-        if self.is_predictor:
-            self.d1 = torch.nn.Linear(32 * dim2[0] * dim2[1], 1024)
-            # self.d1 = torch.nn.Linear(3 * 64 * 64, 2048)
-            self.d2 = torch.nn.Linear(1024, 1024)
-            self.d3 = torch.nn.Linear(1024, 1024)
-            self.d4 = torch.nn.Linear(1024, 512)
-            self.d5 = torch.nn.Linear(512, 256)
-            self.d6 = torch.nn.Linear(256, 256)
-            self.feature = torch.nn.Linear(256, rnd_feature_size)
-        else:
-            self.feature = torch.nn.Linear(32 * dim2[0] * dim2[1], rnd_feature_size)
-
-    def forward(self, x):
-        x = x.permute(0, 1, 2, 3)
-        x = F.leaky_relu(self.conv1(x))
-        x = F.leaky_relu(self.conv2(x))
-        x = self.flat(x)
-
-        if self.is_predictor:
-            x = F.relu(self.d1(x))
-            x = F.relu(self.d2(x))
-            x = F.relu(self.d3(x))
-            x = F.relu(self.d4(x))
-            x = F.relu(self.d5(x))
-            x = F.relu(self.d6(x))
-        return self.feature(x)
-
-
-class RNDNetwork(torch.nn.Module):
-    def __init__(self):
-        super(RNDNetwork, self).__init__()
-        self.random_network = NN(is_predictor=False).to(device)
-        self.predictor_network = NN(is_predictor=True).to(device)
-        self.optimizer = torch.optim.Adam(self.predictor_network.parameters(), lr=rnd_learning_rate)
-
-    def get_reward(self, x):
-        y_true = self.random_network(x).detach()
-        y_pred = self.predictor_network(x)
-        reward = torch.pow(y_pred - y_true, 2).sum()
-        return reward
-
-    def update(self, reward):
-        reward.sum().backward()
-        self.optimizer.step()
+        return x
 
 
 # PPOAgent 클래스 -> PPO 알고리즘을 위한 다양한 함수 정의
@@ -163,9 +216,8 @@ class Agent:
         self.save_path = f"{save_path}/{id}"
         self.load_path = f"{load_path}/{id}"
 
-        self.network = DQNNetwork().to(device)
-        self.target_network = copy.deepcopy(self.network).to(device)
-        self.rnd = RNDNetwork()
+        self.network = DQNNetwork()
+        self.target_network = copy.deepcopy(self.network)
         self.optimizer = torch.optim.Adam(self.network.parameters(), lr=self.learning_rate)
 
         self.epsilon = 1.0
@@ -179,7 +231,6 @@ class Agent:
             print(f"... Load Model from {self.load_path} ...")
             checkpoint = torch.load(self.load_path + '/ckpt', map_location=device)
             self.network.load_state_dict(checkpoint["network"])
-            self.optimizer.load_state_dict(checkpoint["optimizer"])
 
     # 정책을 통해 행동 결정
     def get_action(self, state, training=True):
@@ -188,11 +239,12 @@ class Agent:
 
         # 네트워크 연산에 따라 행동 결정
         q = self.network(torch.FloatTensor(state).to(device))
+        # print(list(self.network.parameters()))
         if np.random.rand() <= self.epsilon:
             if np.random.rand() >= 0.5:
                 action = torch.multinomial(q, num_samples=1).cpu().numpy()
             else:
-                action = np.random.randint(0, action_size, size=(1,1))
+                action = np.random.randint(0, action_size, size=(1, 1))
 
         else:
             action = [torch.argmax(q, dim=1).to("cpu").tolist()]
@@ -215,23 +267,20 @@ class Agent:
         samples = random.sample(self.memory, samples_size)
 
         states, actions, rewards, next_states, dones = zip(*samples)
-        states = torch.tensor(states, dtype=torch.float).to(device)
-        actions = torch.tensor(actions, dtype=torch.long).view(samples_size, -1).to(device)
-        rewards = torch.tensor(rewards, dtype=torch.float).view(samples_size, -1).to(device)
-        next_states = torch.tensor(next_states, dtype=torch.float).to(device)
-        dones = torch.tensor(dones, dtype=torch.float).to(device)
+        states = torch.as_tensor(states, dtype=torch.float, device=device)
+        actions = torch.as_tensor(actions, dtype=torch.long, device=device).view(samples_size, -1)
+        rewards = torch.as_tensor(rewards, dtype=torch.float, device=device).view(samples_size, -1)
+        next_states = torch.as_tensor(next_states, dtype=torch.float, device=device)
+        dones = torch.as_tensor(dones, dtype=torch.float, device=device)
 
-        rnd_loss = self.rnd.get_reward(states)
-        adjusted_rewards = rewards + rnd_loss.clone().detach()
-        self.rnd.update(rnd_loss)
-        target_q = adjusted_rewards.squeeze() + self._lambda * self.target_network(next_states).max(dim=1)[0].detach()*(1 - dones)
+        target_q = rewards.squeeze() + self._lambda * self.target_network(next_states).max(dim=1)[0].detach()*(1 - dones)
         policy_q = self.network(states).gather(1, actions)
-        loss = F.smooth_l1_loss(policy_q.squeeze(), target_q.squeeze())
+        loss = torch.sum(torch.square(policy_q.squeeze() - target_q.squeeze()), dim=1).mean()
         loss.backward()
 
         self.optimizer.step()
 
-        return loss.to("cpu").detach().numpy(), rnd_loss.to("cpu").detach().numpy()
+        return loss.to("cpu").detach().numpy()
 
     # 네트워크 모델 저장
     def save_model(self):
@@ -242,10 +291,9 @@ class Agent:
         }, save_path + '/ckpt')
 
     # 학습 기록
-    def write_summary(self, score, q_loss, rnd_loss, step):
+    def write_summary(self, score, q_loss, step):
         self.writer.add_scalar("run/score", score, step)
         self.writer.add_scalar("model/q_loss", q_loss, step)
-        self.writer.add_scalar("model/rnd_loss", rnd_loss, step)
 
 
 # Main 함수 -> 전체적으로 Adversarial PPO 알고리즘을 진행 
@@ -267,8 +315,8 @@ if __name__ == '__main__':
     agent_B = Agent("B")
 
     episode = 0
-    q_losses_A, rnd_losses_A, score_A = [], [], 0
-    q_losses_B, rnd_losses_B, score_B = [], [], 0
+    q_losses_A, score_A = [], 0
+    q_losses_B, score_B = [], 0
     for step in range(run_step):
         if step == run_step:
             if train_mode:
@@ -308,32 +356,26 @@ if __name__ == '__main__':
 
             if (step + 1) % train_interval == 0:
                 # 학습 수행
-                q_loss_A, rnd_loss_A = agent_A.train_model()
+                q_loss_A = agent_A.train_model()
                 q_losses_A.append(q_loss_A)
-                rnd_losses_A.append(rnd_loss_A)
 
-                q_loss_B, rnd_loss_B = agent_B.train_model()
+                q_loss_B = agent_B.train_model()
                 q_losses_B.append(q_loss_B)
-                rnd_losses_B.append(rnd_loss_A)
 
         if done_A or done_B:
             episode += 1
-
-            mean_rnd_loss_A = np.mean(rnd_losses_A) if len(rnd_losses_A) > 0 else 0
-            mean_q_loss_A = np.mean(q_losses_A) if len(q_losses_A) > 0 else 0
-            agent_A.write_summary(score_A, mean_q_loss_A, mean_rnd_loss_A, step)
-
-            mean_rnd_loss_B = np.mean(rnd_losses_B) if len(rnd_losses_B) > 0 else 0
-            mean_q_loss_B = np.mean(q_losses_B) if len(q_losses_B) > 0 else 0
-            agent_B.write_summary(score_B, mean_q_loss_B, mean_rnd_loss_B, step)
+            A_q_mean = np.mean(q_losses_A)
+            B_q_mean = np.mean(q_losses_B)
 
             print(f"{episode} Episode / Step: {step} / " + \
                   f"A Score: {score_A:.5f} / B Score: {score_B:.5f} / " + \
-                  f"A Q_Loss: {mean_q_loss_A:.4f} / B Q_Loss: {mean_q_loss_B:.4f} / " + \
-                  f"A rnd Loss: {mean_rnd_loss_A:.4f} / B rnd Loss: {mean_rnd_loss_B:.4f}")
+                  f"A Q_Loss: {A_q_mean:.4f} / B Q_Loss: {B_q_mean:.4f}")
 
-            mean_q_loss_A, rnd_losses_A, score_A = [], [], 0
-            mean_q_loss_B, rnd_losses_B, score_B = [], [], 0
+            agent_A.write_summary(score_A, A_q_mean, step)
+            agent_B.write_summary(score_B, B_q_mean, step)
+
+            score_A = 0
+            score_B = 0
 
             # 네트워크 모델 저장
             if train_mode and episode % save_interval == 0:
