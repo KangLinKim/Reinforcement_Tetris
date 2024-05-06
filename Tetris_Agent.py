@@ -45,40 +45,41 @@ class DQNNetwork(torch.nn.Module):
         super(DQNNetwork, self).__init__(**kwargs)
         self.params = None
         self.compression = 0.5
+        self.k = 32
         self.dim = [0, 0, 0]
         # Convolution
         # codes are in the Function - ConvolutionLayer
 
         # Dense Block(1)
         # codes are in the Function - DenseBlock
-        self.denseBlock_1ChannelSize = 32
-        self.denseBlock_1Cnt = 6
+        self.denseBlock_1ChannelSize = self.k
+        self.denseBlock_1Cnt = 3
 
         # Transition Layer(1)
         # codes are in the Function - TransitionLayer
 
         # Dense Block(2)
         # codes are in the Function - DenseBlock
-        self.denseBlock_2ChannelSize = 32
-        self.denseBlock_2Cnt = 12
+        self.denseBlock_2ChannelSize = self.k
+        self.denseBlock_2Cnt = 6
 
         # Transition Layer(2)
         # codes are in the Function - TransitionLayer
 
         # Dense Block(3)
         # codes are in the Function - DenseBlock
-        self.denseBlock_3ChannelSize = 32
+        self.denseBlock_3ChannelSize = self.k
         self.denseBlock_3Cnt = 24
 
         # Dense Block(4)
         # codes are in the Function - DenseBlock
-        self.denseBlock_4ChannelSize = 32
+        self.denseBlock_4ChannelSize = self.k
         self.denseBlock_4Cnt = 16
 
         self.flat = torch.nn.Flatten()
 
         # FC Layers
-        self.fc1 = torch.nn.Linear(1024 * 7 * 7, 1024, device=device)
+        self.fc1 = torch.nn.Linear(14464, 1024, device=device)
         self.fc2 = torch.nn.Linear(1024, 256, device=device)
         self.fc_out = torch.nn.Linear(256, action_size, device=device)
 
@@ -170,30 +171,32 @@ class DQNNetwork(torch.nn.Module):
     def forward(self, x):
         # x = x.permute(0, 3, 1, 2)
         x = x.permute(0, 1, 2, 3)
-        x = self.ConvolutionLayer(x)
+        x = self.ConvolutionLayer(x)    #16
+
         xCopy = x[:]
         for i in range(self.denseBlock_1Cnt):
             tmpX = self.DenseBlock(xCopy, self.denseBlock_1ChannelSize)
             x = torch.cat((x, tmpX), dim=1)
         # print(x.shape)
-        x = self.TransitionBlock(x, self.dim[0] + self.denseBlock_1ChannelSize * self.denseBlock_1Cnt)
+        x = self.TransitionBlock(x, self.dim[0] + self.denseBlock_1ChannelSize * self.denseBlock_1Cnt)  #8
 
         xCopy = x[:]
         for i in range(self.denseBlock_2Cnt):
             tmpX = self.DenseBlock(xCopy, self.denseBlock_2ChannelSize)
             x = torch.cat((x, tmpX), dim=1)
-        x = self.TransitionBlock(x, self.dim[0] + self.denseBlock_2ChannelSize * self.denseBlock_2Cnt)
+        x = self.TransitionBlock(x, self.dim[0] + self.denseBlock_2ChannelSize * self.denseBlock_2Cnt)  #4
 
         xCopy = x[:]
         for i in range(self.denseBlock_3Cnt):
             tmpX = self.DenseBlock(xCopy, self.denseBlock_3ChannelSize)
             x = torch.cat((x, tmpX), dim=1)
-        x = self.TransitionBlock(x, self.dim[0] + self.denseBlock_3ChannelSize * self.denseBlock_3Cnt)
+        # x = self.TransitionBlock(x, self.dim[0] + self.denseBlock_3ChannelSize * self.denseBlock_3Cnt)
+        #
+        # xCopy = x[:]
+        # for i in range(self.denseBlock_4Cnt):
+        #     tmpX = self.DenseBlock(xCopy, self.denseBlock_4ChannelSize)
+        #     x = torch.cat((x, tmpX), dim=1)
 
-        xCopy = x[:]
-        for i in range(self.denseBlock_4Cnt):
-            tmpX = self.DenseBlock(xCopy, self.denseBlock_4ChannelSize)
-            x = torch.cat((x, tmpX), dim=1)
         self.dim = x.shape[1:]
 
         x = self.flat(x)
